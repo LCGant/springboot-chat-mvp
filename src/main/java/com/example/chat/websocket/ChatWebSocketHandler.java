@@ -2,11 +2,13 @@ package com.example.chat.websocket;
 
 import com.example.chat.dto.ChatMessageDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.net.URI;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,17 +25,18 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) {
-        String convId = session.getUri().getQuery();
-        if (convId == null) {
-            convId = String.valueOf(convCounter.getAndIncrement());
-        }
-        sessions.computeIfAbsent(convId, id -> ConcurrentHashMap.newKeySet()).add(session);
+    public void afterConnectionEstablished(@NonNull WebSocketSession session) {
+        URI uri = session.getUri();
+        String convId = (uri != null && uri.getQuery() != null)
+            ? uri.getQuery()
+            : String.valueOf(convCounter.getAndIncrement());
+        sessions.computeIfAbsent(convId, _ -> ConcurrentHashMap.newKeySet()).add(session);
         session.getAttributes().put("convId", convId);
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+    protected void handleTextMessage(@NonNull WebSocketSession session,
+                                     @NonNull TextMessage message) throws Exception {
         ChatMessageDto msg = mapper.readValue(message.getPayload(), ChatMessageDto.class);
         String convId = msg.getConversationId();
         Set<WebSocketSession> convo = sessions.getOrDefault(convId, Set.of());
@@ -44,7 +47,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    public void afterConnectionClosed(WebSocketSession session, org.springframework.web.socket.CloseStatus status) {
+    public void afterConnectionClosed(@NonNull WebSocketSession session,
+                                      @NonNull org.springframework.web.socket.CloseStatus status) {
         String convId = (String) session.getAttributes().get("convId");
         Set<WebSocketSession> convo = sessions.get(convId);
         if (convo != null) {

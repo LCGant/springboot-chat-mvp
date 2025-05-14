@@ -13,6 +13,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public WebSocketConfig(ChatWebSocketHandler handler) {
         this.handler = handler;
     }
+    @SuppressWarnings("null")
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(handler, "/ws/chat").setAllowedOrigins("*");
