@@ -5,76 +5,186 @@
   <title>Chat MVP Test</title>
   <style>
     body { font-family: sans-serif; margin: 2rem; }
+    #userList { margin-bottom: 1rem; }
     #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 0.5rem; }
     #messages div { margin-bottom: 0.5rem; }
     #controls { margin-top: 1rem; }
-    input, button { padding: 0.5rem; margin-right: 0.5rem; }
+    input, select, button { padding: 0.5rem; margin-right: 0.5rem; }
   </style>
 </head>
 <body>
   <h1>Chat MVP</h1>
 
+  <!-- Critical: lista global de usuários serve de ponto de entrada para chat privado -->
+  <div id="userList"><em>Carregando usuários…</em></div>
+
+  <!-- Setup de conversa: ID, destinatário e seu nome -->
   <div id="setup">
-    <label>Conversation ID: <input id="convId" value="1"></label>
-    <label>Seu nome: <input id="username" value="User"></label>
+    <label>Conversation ID:
+      <input id="convId" type="number" min="1" placeholder="ex: 1">
+    </label>
+    <label>Destinatário (opcional):
+      <select id="toUser">
+        <option value="">(Grupo)</option>
+      </select>
+    </label>
+    <label>Seu nome:
+      <input id="username" placeholder="Seu usuário">
+    </label>
     <button id="connect">Conectar</button>
   </div>
 
+  <!-- Área de chat escondida até conexão -->
   <div id="chat" style="display:none">
     <div id="messages"></div>
     <div id="controls">
-      <input id="text" placeholder="Digite sua mensagem..." size="50">
+      <input id="text" placeholder="Digite sua mensagem…" size="50">
       <button id="send">Enviar</button>
     </div>
   </div>
 
   <script>
     let socket;
+    let privateFlow = false;  // Critical: flag para diferenciar fluxo privado x grupo
+
+    const userListEl = document.getElementById('userList');
     const messagesEl = document.getElementById('messages');
-    const convInput = document.getElementById('convId');
-    const userInput = document.getElementById('username');
-    const textInput = document.getElementById('text');
+    const convInput  = document.getElementById('convId');
+    const toSelect   = document.getElementById('toUser');
+    const userInput  = document.getElementById('username');
+    const textInput  = document.getElementById('text');
     const connectBtn = document.getElementById('connect');
-    const sendBtn = document.getElementById('send');
+    const sendBtn    = document.getElementById('send');
 
-    connectBtn.addEventListener('click', () => {
-      const convId = convInput.value.trim();
-      const user = userInput.value.trim();
-      if (!convId || !user) return alert('Preencha ID da conversa e seu nome.');
+    // Critical: carrega presença global, mantém userSessions no servidor
+    async function loadGlobalUsers() {
+      try {
+        const resp = await fetch('/conversas/usuarios-online');
+        const users = await resp.json();
+        userListEl.innerHTML = '<h2>Usuários online:</h2><ul>' +
+          users.map(u => `<li><button onclick="selectUser('${u}')">${u}</button></li>`).join('') +
+          '</ul>';
+      } catch {
+        userListEl.textContent = 'Erro ao listar usuários.';
+      }
+    }
 
-      socket = new WebSocket(`ws://${location.host}/ws/chat?${convId}`);
+    // Critical: inicia fluxo privado e trava edição do ID manual
+    async function selectUser(other) {
+      const me = userInput.value.trim();
+      if (!me) return alert('Informe seu nome primeiro.');
+      privateFlow = true;
+      convInput.readOnly = true;
+      try {
+        const resp = await fetch('/conversas', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ userA: me, userB: other })
+        });
+        const { conversationId } = await resp.json();
+        convInput.value = conversationId;
+        toSelect.innerHTML =
+          '<option value="">(Grupo)</option>' +
+          `<option value="${other}" selected>${other}</option>`;
+      } catch {
+        alert('Erro ao iniciar chat privado.');
+      }
+    }
+
+    loadGlobalUsers();
+
+    connectBtn.addEventListener('click', async () => {
+      const convId = Number(convInput.value.trim());
+      const user   = userInput.value.trim();
+      const toUser = toSelect.value || '';
+
+      // Critical: valida consistência tipo de conversa antes de prosseguir
+      try {
+        const respType = await fetch(`/conversas/${convId}/tipo`);
+        const { type } = await respType.json();
+        if (type === "private" && !privateFlow)
+          return alert("Esse ID é privado. Use o botão do usuário.");
+        if (type === "group" && privateFlow) {
+          privateFlow = false;
+          convInput.readOnly = false;
+          return alert("Esse ID é de grupo. Deselecione o destinatário.");
+        }
+      } catch {
+        return alert("Conversa não encontrada.");
+      }
+
+      if (!convId || !user) {
+        return alert('Preencha ID da conversa e seu nome.');
+      }
+
+      // Carrega histórico via REST (evita duplicação no WebSocket)
+      messagesEl.innerHTML = '';
+      try {
+        const resp = await fetch(`/conversas/${convId}/mensagens`);
+        (await resp.json()).forEach(msg => {
+          const div = document.createElement('div');
+          div.textContent = msg.to
+            ? `(privado) [${convId}] ${msg.from} → ${msg.to}: ${msg.text}`
+            : `[${convId}] ${msg.from}: ${msg.text}`;
+          messagesEl.appendChild(div);
+        });
+      } catch {
+        console.error('Erro histórico');
+      }
+
+      // Atualiza select de participantes online no grupo
+      try {
+        const respU = await fetch(`/conversas/${convId}/usuarios`);
+        const users = await respU.json();
+        toSelect.innerHTML = '<option value="">(Grupo)</option>' +
+          users.filter(u => u !== user)
+               .map(u => `<option value="${u}">${u}</option>`).join('');
+      } catch {
+        console.error('Erro usuários grupo');
+      }
+
+      // Critical: abre WebSocket só após histórico + validações
+      socket = new WebSocket(
+        `ws://${location.host}/ws/chat?group=${convId}&user=${encodeURIComponent(user)}`
+      );
 
       socket.addEventListener('open', () => {
-        document.getElementById('setup').style.display = 'none';
-        document.getElementById('chat').style.display = '';
+        setup.style.display = 'none';
+        chat.style.display = '';
       });
 
-      socket.addEventListener('message', event => {
-        const msg = JSON.parse(event.data);
-        const line = document.createElement('div');
-        line.textContent = `[${msg.conversationId}] ${msg.from}: ${msg.text}`;
-        messagesEl.appendChild(line);
+      // Critical: handler de mensagens novas
+      socket.addEventListener('message', e => {
+        const msg = JSON.parse(e.data);
+        const div = document.createElement('div');
+        div.textContent = msg.to
+          ? `(privado) [${msg.conversationId}] ${msg.from} → ${msg.to}: ${msg.text}`
+          : `[${msg.conversationId}] ${msg.from}: ${msg.text}`;
+        messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
       });
 
       socket.addEventListener('close', () => {
         alert('Conexão fechada');
-        document.getElementById('setup').style.display = '';
-        document.getElementById('chat').style.display = 'none';
+        setup.style.display = '';
+        chat.style.display = 'none';
       });
     });
 
+    // Envio de mensagem via WS
     sendBtn.addEventListener('click', () => {
-      const text = textInput.value.trim();
-      const convId = convInput.value.trim();
-      const user = userInput.value.trim();
+      const text   = textInput.value.trim();
+      const convId = Number(convInput.value.trim());
+      const user   = userInput.value.trim();
+      const toUser = toSelect.value || null;
       if (!text) return;
       const msg = { conversationId: convId, from: user, text };
+      if (toUser) msg.to = toUser;
       socket.send(JSON.stringify(msg));
       textInput.value = '';
     });
 
-    // Enviar ao pressionar Enter
+    // Enter = enviar
     textInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') sendBtn.click();
     });
