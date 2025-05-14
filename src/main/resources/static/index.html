@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Chat MVP Test</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 0.5rem; }
+    #messages div { margin-bottom: 0.5rem; }
+    #controls { margin-top: 1rem; }
+    input, button { padding: 0.5rem; margin-right: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Chat MVP</h1>
+
+  <div id="setup">
+    <label>Conversation ID: <input id="convId" value="1"></label>
+    <label>Seu nome: <input id="username" value="User"></label>
+    <button id="connect">Conectar</button>
+  </div>
+
+  <div id="chat" style="display:none">
+    <div id="messages"></div>
+    <div id="controls">
+      <input id="text" placeholder="Digite sua mensagem..." size="50">
+      <button id="send">Enviar</button>
+    </div>
+  </div>
+
+  <script>
+    let socket;
+    const messagesEl = document.getElementById('messages');
+    const convInput = document.getElementById('convId');
+    const userInput = document.getElementById('username');
+    const textInput = document.getElementById('text');
+    const connectBtn = document.getElementById('connect');
+    const sendBtn = document.getElementById('send');
+
+    connectBtn.addEventListener('click', () => {
+      const convId = convInput.value.trim();
+      const user = userInput.value.trim();
+      if (!convId || !user) return alert('Preencha ID da conversa e seu nome.');
+
+      socket = new WebSocket(`ws://${location.host}/ws/chat?${convId}`);
+
+      socket.addEventListener('open', () => {
+        document.getElementById('setup').style.display = 'none';
+        document.getElementById('chat').style.display = '';
+      });
+
+      socket.addEventListener('message', event => {
+        const msg = JSON.parse(event.data);
+        const line = document.createElement('div');
+        line.textContent = `[${msg.conversationId}] ${msg.from}: ${msg.text}`;
+        messagesEl.appendChild(line);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      });
+
+      socket.addEventListener('close', () => {
+        alert('Conexão fechada');
+        document.getElementById('setup').style.display = '';
+        document.getElementById('chat').style.display = 'none';
+      });
+    });
+
+    sendBtn.addEventListener('click', () => {
+      const text = textInput.value.trim();
+      const convId = convInput.value.trim();
+      const user = userInput.value.trim();
+      if (!text) return;
+      const msg = { conversationId: convId, from: user, text };
+      socket.send(JSON.stringify(msg));
+      textInput.value = '';
+    });
+
+    // Enviar ao pressionar Enter
+    textInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') sendBtn.click();
+    });
+  </script>
+</body>
+</html>
